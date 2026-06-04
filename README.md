@@ -371,6 +371,32 @@ That's it. The compression is lossy, but the entire Q4_K pipeline exists to make
 
 ---
 
+##  Why This Matters at Inference, Not Just Storage
+
+The common assumption: quantization helps storage, but you pay a dequantization cost at runtime. GGML's design makes that cost **nearly free**.
+
+During matrix multiplication (`mul_mat`), GGML **never** materializes a full `float32` weight matrix. Instead, it processes weights in small, fixed-size windows — typically 4–8 blocks at a time, sized to fill SIMD registers (AVX2 on x86 is 256 bits = 8 `float32`s at once). Each window gets dequantized, multiplied against the input chunk, accumulated into the output, and then thrown away.
+
+```c
+for each window of blocks:
+    dequant(qs, d)           → ~128–256 floats, lives in registers
+    accumulate into output   → dot product
+    discard, move to next window
+```
+
+**Peak live `float32` weight data at any moment: a few KB, not GB.**
+
+This works because of the block structure. Each block is self-contained — it carries its own scale(s) and can be dequantized independently, with no knowledge of the rest of the matrix. A global scale per layer would force you to load the whole layer first.
+
+So the block design buys you two things from one decision:
+
+| Benefit | How |
+|---------|-----|
+| **Better Accuracy** | Local scales isolate outliers |
+| **Streaming Matmul** | Self-contained blocks = no full dequant needed |
+
+---
+
 ##  The Takeaway
 
 | Format | Scale | Min | Trick | Quality |
